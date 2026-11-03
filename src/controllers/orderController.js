@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import Order from "../models/Order.js";
 import Product from "../models/productModels.js";
-
+import userModel from "../models/userModel.js";
 const DELIVERY_CHARGE = 45;
 
 const isValidPhone = (phone) => /^[6-9]\d{9}$/.test(phone);
@@ -245,7 +245,56 @@ export const placeOrder = async (req, res) => {
       paymentStatus: "Pending",
       paymentMethod: "UNDECIDED",
     });
+// Save delivery address to the logged-in customer's account
+if (req.userId) {
+  const user = await userModel.findById(req.userId);
 
+  if (user) {
+    const fullName = `${firstName} ${lastName}`.trim();
+
+    // Check whether the same address already exists
+    const existingAddress = user.addresses.find((savedAddress) => {
+      return (
+        String(savedAddress.phone) === phone &&
+        String(savedAddress.pincode) === normalizedAddress.pincode &&
+        String(savedAddress.houseNo).trim().toLowerCase() ===
+          normalizedAddress.house.trim().toLowerCase() &&
+        String(savedAddress.area).trim().toLowerCase() ===
+          normalizedAddress.street.trim().toLowerCase()
+      );
+    });
+
+    if (!existingAddress) {
+      const makeDefault = user.addresses.length === 0;
+
+      if (makeDefault) {
+        user.addresses.forEach((savedAddress) => {
+          savedAddress.isDefault = false;
+        });
+      }
+
+      user.addresses.push({
+        fullName,
+        phone,
+        pincode: normalizedAddress.pincode,
+        houseNo: normalizedAddress.house,
+        area: normalizedAddress.street,
+        landmark: "",
+        city: normalizedAddress.city,
+        district: normalizedAddress.district,
+        state: normalizedAddress.state,
+        addressType: "Home",
+        isDefault: makeDefault,
+      });
+
+      await user.save();
+
+      console.log("Customer delivery address saved successfully.");
+    } else {
+      console.log("Customer address already exists.");
+    }
+  }
+}
     return res.status(201).json({
       success: true,
       message: "Order placed successfully.",

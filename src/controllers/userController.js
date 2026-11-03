@@ -272,6 +272,7 @@ export const addAddress = async (req, res) => {
       houseNo,
       area,
       city,
+        district,
       state,
     };
 
@@ -331,6 +332,7 @@ export const addAddress = async (req, res) => {
       area: String(area).trim(),
       landmark: String(landmark).trim(),
       city: String(city).trim(),
+        district: String(district).trim(),
       state: String(state).trim(),
       addressType,
       isDefault: makeDefault,
