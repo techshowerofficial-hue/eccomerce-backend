@@ -245,56 +245,67 @@ export const placeOrder = async (req, res) => {
       paymentStatus: "Pending",
       paymentMethod: "UNDECIDED",
     });
-// Save delivery address to the logged-in customer's account
+
+// ==========================================
+// SAVE DELIVERY ADDRESS TO CUSTOMER ACCOUNT
+// ==========================================
 if (req.userId) {
-  const user = await userModel.findById(req.userId);
+  try {
+    const user = await userModel.findById(req.userId);
 
-  if (user) {
-    const fullName = `${firstName} ${lastName}`.trim();
+    if (user) {
+      const fullName = `${firstName} ${lastName}`.trim();
 
-    // Check whether the same address already exists
-    const existingAddress = user.addresses.find((savedAddress) => {
-      return (
-        String(savedAddress.phone) === phone &&
-        String(savedAddress.pincode) === normalizedAddress.pincode &&
-        String(savedAddress.houseNo).trim().toLowerCase() ===
-          normalizedAddress.house.trim().toLowerCase() &&
-        String(savedAddress.area).trim().toLowerCase() ===
-          normalizedAddress.street.trim().toLowerCase()
-      );
-    });
-
-    if (!existingAddress) {
-      const makeDefault = user.addresses.length === 0;
-
-      if (makeDefault) {
-        user.addresses.forEach((savedAddress) => {
-          savedAddress.isDefault = false;
-        });
-      }
-
-      user.addresses.push({
-        fullName,
-        phone,
-        pincode: normalizedAddress.pincode,
-        houseNo: normalizedAddress.house,
-        area: normalizedAddress.street,
-        landmark: "",
-        city: normalizedAddress.city,
-        district: normalizedAddress.district,
-        state: normalizedAddress.state,
-        addressType: "Home",
-        isDefault: makeDefault,
+      // Check if the same address already exists
+      const existingAddress = user.addresses.find((savedAddress) => {
+        return (
+          String(savedAddress.phone).trim() === phone &&
+          String(savedAddress.pincode).trim() ===
+            normalizedAddress.pincode &&
+          String(savedAddress.houseNo).trim().toLowerCase() ===
+            normalizedAddress.house.trim().toLowerCase() &&
+          String(savedAddress.area).trim().toLowerCase() ===
+            normalizedAddress.street.trim().toLowerCase() &&
+          String(savedAddress.city).trim().toLowerCase() ===
+            normalizedAddress.city.trim().toLowerCase() &&
+          String(savedAddress.district).trim().toLowerCase() ===
+            normalizedAddress.district.trim().toLowerCase() &&
+          String(savedAddress.state).trim().toLowerCase() ===
+            normalizedAddress.state.trim().toLowerCase()
+        );
       });
 
-      await user.save();
+      if (!existingAddress) {
+        const makeDefault = user.addresses.length === 0;
 
-      console.log("Customer delivery address saved successfully.");
-    } else {
-      console.log("Customer address already exists.");
+        user.addresses.push({
+          fullName,
+          phone,
+          pincode: normalizedAddress.pincode,
+          houseNo: normalizedAddress.house,
+          area: normalizedAddress.street,
+          landmark: "",
+          city: normalizedAddress.city,
+          district: normalizedAddress.district,
+          state: normalizedAddress.state,
+          addressType: "Home",
+          isDefault: makeDefault,
+        });
+
+        await user.save();
+
+        console.log("Delivery address saved to customer account.");
+      } else {
+        console.log("Delivery address already exists in customer account.");
+      }
     }
+  } catch (addressError) {
+    // Address saving failure should not hide a successfully created order.
+    console.error("Customer address saving error:", addressError);
   }
 }
+
+
     return res.status(201).json({
       success: true,
       message: "Order placed successfully.",
@@ -309,14 +320,22 @@ if (req.userId) {
         createdAt: order.createdAt,
       },
     });
-  } catch (error) {
-    console.error("Place order controller error:", error);
+  
+} catch (error) {
+  console.error("========== PLACE ORDER ERROR ==========");
+  console.error("Error name:", error.name);
+  console.error("Error message:", error.message);
+  console.error("Error stack:", error.stack);
+  console.error("========================================");
 
-    return res.status(500).json({
-      success: false,
-      message: "Unable to place order. Please try again.",
-    });
-  }
+  return res.status(500).json({
+    success: false,
+    message: "Unable to place order.",
+    error: error.message,
+  });
+}
+
+
 };
 
 // ==========================================
