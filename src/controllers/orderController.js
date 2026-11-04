@@ -187,16 +187,12 @@ export const placeOrder = async (req, res) => {
         });
       }
 
-      if (
-        product.stock !== undefined &&
-        product.stock !== null &&
-        Number(product.stock) < quantity
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient stock for ${product.name}.`,
-        });
-      }
+if (Number(product.stock) < quantity) {
+  return res.status(409).json({
+    success: false,
+    message: `${product.name} is out of stock or has insufficient stock.`,
+  });
+}
 
       const lineTotal = price * quantity;
 
@@ -215,37 +211,84 @@ export const placeOrder = async (req, res) => {
     const totalAmount = subtotal + deliveryCharge;
 
     // Generate order ID
-    const orderId = `NILE-${Date.now()}-${Math.floor(
-      1000 + Math.random() * 9000
-    )}`;
+// ==========================================
+// ATOMIC STOCK DEDUCTION + ORDER CREATION
+// ==========================================
 
-    // Save order
-    const order = await Order.create({
-      orderId,
+let order;
 
-      // User ID is set by authMiddleware.
-      // Guest orders can have userId = null if guest checkout is enabled.
-      userId: req.userId || null,
+const session = await mongoose.startSession();
 
-      customer: {
-        firstName,
-        lastName,
-        phone,
-        email,
-      },
+try {
+  await session.withTransaction(async () => {
+    for (const item of orderItems) {
+      const stockUpdate = await Product.updateOne(
+        {
+          _id: item.productId,
+          isAvailable: { $ne: false },
+          stock: { $gte: item.quantity },
+        },
+        {
+          $inc: {
+            stock: -item.quantity,
+          },
+        },
+        { session }
+      );
 
-      address: normalizedAddress,
-      items: orderItems,
-      subtotal,
-      deliveryCharge,
-      totalAmount,
-      notes: String(notes || "").trim(),
+      if (stockUpdate.modifiedCount !== 1) {
+        const stockError = new Error(
+          `Insufficient stock for ${item.name}. Please refresh and try again.`
+        );
 
-      status: "Pending",
-      paymentStatus: "Pending",
-      paymentMethod: "UNDECIDED",
+        stockError.code = "INSUFFICIENT_STOCK";
+        throw stockError;
+      }
+    }
+
+    const createdOrders = await Order.create(
+      [
+        {
+          orderId,
+          userId: req.userId || null,
+
+          customer: {
+            firstName,
+            lastName,
+            phone,
+            email,
+          },
+
+          address: normalizedAddress,
+          items: orderItems,
+          subtotal,
+          deliveryCharge,
+          totalAmount,
+          notes: String(notes || "").trim(),
+
+          status: "Pending",
+          paymentStatus: "Pending",
+          paymentMethod: "UNDECIDED",
+          stockDeducted: true,
+        },
+      ],
+      { session }
+    );
+
+    order = createdOrders[0];
+  });
+} catch (error) {
+  if (error.code === "INSUFFICIENT_STOCK") {
+    return res.status(409).json({
+      success: false,
+      message: error.message,
     });
+  }
 
+  throw error;
+} finally {
+  await session.endSession();
+}
 // ==========================================
 // SAVE DELIVERY ADDRESS TO CUSTOMER ACCOUNT
 // ==========================================
@@ -504,7 +547,14 @@ export const getOrderDetails = async (req, res) => {
 // ==========================================
 // UPDATE ORDER STATUS - ADMIN
 // ==========================================
+// ==========================================
+// UPDATE ORDER STATUS - ADMIN
+// RESTORE STOCK ON CANCELLATION
+// ==========================================
+
 export const updateOrderStatus = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const { id } = req.params;
     const { status, paymentStatus } = req.body;
@@ -525,31 +575,24 @@ export const updateOrderStatus = async (req, res) => {
       "Refunded",
     ];
 
-    const update = {};
-
-    if (status !== undefined) {
-      if (!allowedStatuses.includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid order status.",
-        });
-      }
-
-      update.status = status;
+    if (status !== undefined && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order status.",
+      });
     }
 
-    if (paymentStatus !== undefined) {
-      if (!allowedPaymentStatuses.includes(paymentStatus)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid payment status.",
-        });
-      }
-
-      update.paymentStatus = paymentStatus;
+    if (
+      paymentStatus !== undefined &&
+      !allowedPaymentStatuses.includes(paymentStatus)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment status.",
+      });
     }
 
-    if (Object.keys(update).length === 0) {
+    if (status === undefined && paymentStatus === undefined) {
       return res.status(400).json({
         success: false,
         message: "Provide an order status or payment status.",
@@ -558,36 +601,107 @@ export const updateOrderStatus = async (req, res) => {
 
     const isMongoId = mongoose.Types.ObjectId.isValid(id);
 
-    const order = await Order.findOneAndUpdate(
-      isMongoId
-        ? { $or: [{ _id: id }, { orderId: id }] }
-        : { orderId: id },
-      { $set: update },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
+    const orderFilter = isMongoId
+      ? { $or: [{ _id: id }, { orderId: id }] }
+      : { orderId: id };
 
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found.",
-      });
-    }
+    let updatedOrder;
+
+    await session.withTransaction(async () => {
+      const order = await Order.findOne(orderFilter).session(session);
+
+      if (!order) {
+        const error = new Error("Order not found.");
+        error.code = "ORDER_NOT_FOUND";
+        throw error;
+      }
+
+      // Do not allow a cancelled order to be reactivated.
+      // This avoids selling the same inventory reservation twice.
+      if (
+        order.status === "Cancelled" &&
+        status !== undefined &&
+        status !== "Cancelled"
+      ) {
+        const error = new Error(
+          "A cancelled order cannot be reactivated. Create a new order instead."
+        );
+
+        error.code = "CANCELLED_ORDER";
+        throw error;
+      }
+
+      // Restore stock only on the first transition to Cancelled
+      if (
+        status === "Cancelled" &&
+        order.status !== "Cancelled" &&
+        order.stockDeducted === true
+      ) {
+        for (const item of order.items) {
+          const result = await Product.updateOne(
+            { _id: item.productId },
+            {
+              $inc: {
+                stock: item.quantity,
+              },
+            },
+            { session }
+          );
+
+          if (result.matchedCount !== 1) {
+            const error = new Error(
+              `Product not found while restoring stock: ${item.name}`
+            );
+
+            error.code = "RESTORE_STOCK_FAILED";
+            throw error;
+          }
+        }
+
+        order.stockDeducted = false;
+      }
+
+      if (status !== undefined) {
+        order.status = status;
+      }
+
+      if (paymentStatus !== undefined) {
+        order.paymentStatus = paymentStatus;
+      }
+
+      await order.save({ session });
+
+      updatedOrder = order;
+    });
 
     return res.status(200).json({
       success: true,
       message: "Order updated successfully.",
-      order,
+      order: updatedOrder,
     });
   } catch (error) {
+    if (error.code === "ORDER_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    if (error.code === "CANCELLED_ORDER") {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     console.error("Update order error:", error);
 
     return res.status(500).json({
       success: false,
       message: "Unable to update order.",
     });
+  } finally {
+    await session.endSession();
   }
 };
 

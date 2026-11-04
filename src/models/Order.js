@@ -173,6 +173,10 @@ userId: {
       enum: ["COD", "ONLINE", "UNDECIDED"],
       default: "UNDECIDED",
     },
+    stockDeducted: {
+  type: Boolean,
+  default: false,
+},
   },
   {
     timestamps: true,
