@@ -1,49 +1,83 @@
+import mongoose from "mongoose";
 import categoryModel from "../models/categoryModel.js";
 
 // ADD CATEGORY
 const addCategory = async (req, res) => {
-  try {
-    const { name, image } = req.body;
+try {
+const { name, image, parentCategory } = req.body;
 
-    if (!name || !name.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Category name is required",
-      });
-    }
 
-    const normalizedName = name.trim();
+if (!name || !name.trim()) {
+  return res.status(400).json({
+    success: false,
+    message: "Category name is required",
+  });
+}
 
-    const existingCategory = await categoryModel.findOne({
-      name: { $regex: `^${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
-    });
-
-    if (existingCategory) {
-      return res.status(409).json({
-        success: false,
-        message: "Category already exists",
-      });
-    }
-
-    const category = await categoryModel.create({
-      name: normalizedName,
-      image: image || "",
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Category added successfully",
-      data: category,
-    });
-  } catch (error) {
-    console.error("Add category error:", error);
-
-    return res.status(500).json({
+// Validate parent category if provided
+if (parentCategory) {
+  if (!mongoose.Types.ObjectId.isValid(parentCategory)) {
+    return res.status(400).json({
       success: false,
-      message: "Failed to add category",
+      message: "Invalid parent category ID",
     });
   }
+
+  const parent = await categoryModel.findOne({
+    _id: parentCategory,
+    parentCategory: null,
+  });
+
+  if (!parent) {
+    return res.status(404).json({
+      success: false,
+      message: "Parent category not found",
+    });
+  }
+}
+
+const normalizedName = name.trim();
+
+const existingCategory = await categoryModel.findOne({
+  name: {
+    $regex: `^${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+    $options: "i",
+  },
+});
+
+if (existingCategory) {
+  return res.status(409).json({
+    success: false,
+    message: "Category already exists",
+  });
+}
+
+const category = await categoryModel.create({
+  name: normalizedName,
+  image: image || "",
+  parentCategory: parentCategory || null,
+});
+
+return res.status(201).json({
+  success: true,
+  message: "Category added successfully",
+  data: category,
+});
+
+
+} catch (error) {
+console.error("Add category error:", error);
+
+
+return res.status(500).json({
+  success: false,
+  message: "Failed to add category",
+});
+
+
+}
 };
+
 
 // GET ALL CATEGORIES
 const categoryList = async (req, res) => {

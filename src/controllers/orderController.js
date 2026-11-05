@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 import Order from "../models/Order.js";
 import Product from "../models/productModels.js";
 import userModel from "../models/userModel.js";
-const DELIVERY_CHARGE = 45;
+import { randomBytes } from "crypto";
+const DELIVERY_CHARGE = 0;
 
 const isValidPhone = (phone) => /^[6-9]\d{9}$/.test(phone);
 
@@ -210,7 +211,8 @@ if (Number(product.stock) < quantity) {
     const deliveryCharge = DELIVERY_CHARGE;
     const totalAmount = subtotal + deliveryCharge;
 
-    // Generate order ID
+    // Generate a unique order ID
+    const orderId = `ZVN-${Date.now()}-${randomBytes(3).toString("hex").toUpperCase()}`;
 // ==========================================
 // ATOMIC STOCK DEDUCTION + ORDER CREATION
 // ==========================================
