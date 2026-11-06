@@ -1,4 +1,5 @@
 import express from "express";
+
 import {
   placeOrder,
   getMyOrders,
@@ -6,16 +7,21 @@ import {
   getOrderDetails,
   updateOrderStatus,
 } from "../controllers/orderController.js";
+
 import authMiddleware from "../middleware/auth.js";
+import optionalAuth from "../middleware/optionalAuth.js";
 
 const router = express.Router();
 
 // Customer routes
-router.post("/place", authMiddleware, placeOrder);
+
+// Guest + Logged-in customers
+router.post("/place", optionalAuth, placeOrder);
+
+// Only logged-in customers
 router.get("/my-orders", authMiddleware, getMyOrders);
 
-// IMPORTANT: Protect these three routes with admin authorization middleware.
-// authMiddleware alone only authenticates; it does not prove the user is an admin.
+// Admin routes
 router.get("/admin/list", getAllOrders);
 router.get("/admin/:id", getOrderDetails);
 router.patch("/admin/:id/status", updateOrderStatus);
